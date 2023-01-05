@@ -1,0 +1,438 @@
+---
+title: "Statewide Survey Non-Response Analysis"
+author: "Eve Perry"
+date: today
+format: 
+  bhhi-quarto-html:
+    code-fold: true
+---
+
+```{r setup}
+library(bhhi.doc)
+library(tidyverse)
+library(janitor)
+library(kableExtra)
+library(ggraph)
+library(cowplot)
+library(tidygraph)
+```
+
+# Defining responses and non-responses
+
+To determine the non-response rate, we must first define responses. We only consider those who finished the survey (`survey_count == 1`) as responses. Those who declined to talk to the interviewer, whose eligibility we could not determine (for language or other reasons), who did not consent to the full interview, or did not finish the survey are considered non-responses. We exclude those determined to be ineligible from the non-responses since they are, by definition, not in the survey frame.
+
+Below is a chart that shows the participants' progression through the interview process:
+
+```{r}
+#| echo: true
+surveys = read_rds("Y:/Research/BHHI/statewide_survey_processed_data/latest/statewide_survey_processed.rds") %>% 
+  filter(is.na(rds) | rds == 0) %>% 
+  mutate(
+    county = fct_relevel(
+      as_factor(county),
+      c(
+        "Sonoma",
+        "Placer",
+        "Santa Clara",
+        "Fresno/Madera",
+        "Butte",
+        "Los Angeles",
+        "San Diego",
+        "Sacramento"
+      )
+    ),
+    language_issues = eligible_yn == -4,
+    declined = eligible_yn == -3,
+    could_not_determine_eligibility = eligible_yn == -2,
+    eligibility_determined = eligible_yn >= -1,
+    ineligible = eligible_yn %in% -1:0,
+    eligible = eligible_yn %in% 1:3,
+    consented_at_start = eligible_yn %in% 1:2,
+    did_not_consent = eligible_yn == 3,
+    did_not_finish = consented_at_start & survey_count == 0,
+    response = survey_count == 1,
+    non_response = !(ineligible | survey_count == 1),
+    ## perceived demographics
+    # age
+    perceived_age = fct_explicit_na(as_factor(perceived_age), "Missing"),
+    # disability
+    perceived_disability = fct_explicit_na(
+      as_factor(perceived_disability), "Missing"
+    ),
+    perceived_disability = fct_recode(
+      perceived_disability,
+      "Disabled" = "Yes",
+      "Not Disabled" = "No"
+    ),
+    # intoxication
+    perceived_intoxication = fct_explicit_na(
+      as_factor(perceived_intox), "Missing"
+    ),
+    perceived_intoxication = fct_recode(
+      perceived_intoxication,
+      "Intoxicated" = "Yes",
+      "Not Intoxicated" = "No"
+    ),
+    # gender
+    perceived_gender = fct_explicit_na(
+      as_factor(perceived_gender), "Missing"
+    ),
+    perceived_gender = fct_recode(
+      perceived_gender,
+      "Transgender" = "Transgender, Genderqueer, Gender non-binary or Unclear"
+    ),
+    # race
+    perceived_race = fct_explicit_na(
+      as_factor(perceived_race_onecat), "Missing"
+    ),
+    perceived_race = fct_recode(
+      perceived_race,
+      "Asian/Pacific Islander" = "Asian",
+      "Asian/Pacific Islander" = "Pacific Islander, Samoan, Hawaiian",
+      "Black" = "Black, African-American, African",
+      "White" = "White, Caucasian, European American",
+      "Latinx" = "Latinx, Hispanic, Latin American",
+      "Native American" = "Native American, Alaska Native",
+      "Multiracial" = "Mixed/Multiracial",
+      "Other" = "Different race or ethnic ID, or unclear",
+      "Missing" = "FIX CODING ERROR"
+    )
+  )
+```
+
+```{r}
+nodes = surveys %>% 
+  summarise(
+    approached = n(),
+    declined_eligibility_determination = sum(declined),
+    eligibility_determined = sum(eligibility_determined),
+    no_eligibility_determination = sum(
+      language_issues, could_not_determine_eligibility
+    ),
+    eligible = sum(did_not_consent, did_not_finish, response),
+    ineligible = sum(ineligible),
+    consented = sum(did_not_finish, response),
+    did_not_consent = sum(did_not_consent),
+    finished = sum(response),
+    did_not_finish = sum(did_not_finish)
+  ) %>% 
+  pivot_longer(everything(), names_to = "node", values_to = "count") %>% 
+  mutate(
+    label = paste(
+      str_to_title(str_replace_all(node, "_", " ")),
+      count,
+      sep = "\n"
+    ),
+    response = case_when(
+      node == "finished" ~ "Response",
+      node == "ineligible" ~ "Excluded",
+      node %in% c(
+        "approached", "eligibility_determined", "eligible", "consented"
+      ) ~ "Intermediate",
+      TRUE ~ "Non-Response"
+    )
+  )
+
+edges = tribble(
+  ~ from, ~ to,
+  "approached", "declined_eligibility_determination",
+  "approached", "eligibility_determined",
+  "approached", "no_eligibility_determination",
+  "eligibility_determined", "ineligible",
+  "eligibility_determined", "eligible",
+  "eligible", "did_not_consent",
+  "eligible", "consented",
+  "consented", "did_not_finish",
+  "consented", "finished"
+)
+
+tbl_graph(nodes, edges) %>% 
+  ggraph(layout = "tree") +
+  geom_edge_diagonal() +
+  geom_node_label(
+    aes(label = label, color = response),
+    key_glyph = draw_key_point
+  ) +
+  scale_color_manual(
+    name = NULL,
+    values = c(
+      "Response" = thematic::thematic_get_theme()$qualitative[2],
+      "Non-Response"= thematic::thematic_get_theme()$qualitative[6],
+      "Excluded" = thematic::thematic_get_theme()$qualitative[5],
+      "Intermediate" = "black"
+    ),
+    breaks = c("Response", "Non-Response", "Excluded")
+  ) +
+  coord_cartesian(xlim = c(-1.6, 1.4)) +
+  theme(legend.position = c(0.9, 0.25))
+```
+
+# Non-response rate
+
+## Initial calculation
+
+The initial calculation of the non-response rate simply divides the non-responses by the sum of response and non-responses:
+
+$$ Non\ Response\ Rate = \frac{Non\ Response}{Response + Non\ Response} $$
+And shown by county below:
+
+```{r}
+#| echo: true
+initial_non_response = surveys %>% 
+  group_by(county) %>% 
+  summarise(
+    approached = n(),
+    across(c(response, non_response), sum)
+  ) %>%
+  adorn_totals() %>% 
+  mutate(
+    initial_non_response = non_response / (response + non_response)
+  )
+```
+
+```{r}
+initial_non_response %>% 
+  relocate(non_response, .after = approached) %>% 
+  kbl(
+    col.names = c(
+      "County", "Approached", "Non-Response",
+      "Response", "Initial Non-Response Rate"
+    ),
+    digits = c(rep(0, 4), 3)
+  ) %>% 
+  kable_styling()
+```
+
+## Adjusting the non-responses for eligibility
+
+In the eligibility screening, we've found that a small number of respondents were ineligible. We want to adjust our non-response count for respondents who declined to participate in the eligibility screen and respondents for whom we could not determine eligibility. 
+
+Assuming that respondents for whom we could determine eligibility are not different than those for whom we could not determine eligibility (see [figures](#perceived-demographics-by-eligibility-determination-status) below), some of the respondents without eligibility determination would have been determined to be ineligible. We also want to exclude these people from our non-response rate calculation.
+
+To get the number of  respondents without eligibility determination who would have been determined to be ineligible, we multiply the share of ineligible respondents among respondents with eligibility determinations by the number of of respondents without eligibility. We then subtract that from the non-response count to get the adjusted non-response count:
+
+$$ Adjusted\ Non\ Response = Non\ Response - Eligiblity\ Not\ Determined * \frac{Ineligible}{Eligibility\ Determined} $$
+
+Ultimately, the adjustment does not have a large effect as the adjustment is small in every county:
+
+```{r}
+#| echo: true
+adjusted_non_response = surveys %>% 
+  group_by(county) %>% 
+  summarise(
+    approached = n(),
+    across(c(non_response, eligibility_determined, ineligible), sum)
+  ) %>%
+  mutate(eligibility_not_determined = approached - eligibility_determined) %>% 
+  adorn_totals() %>% 
+  mutate(
+    adjusted_non_response = 
+      non_response - eligibility_not_determined * ineligible / eligibility_determined
+  )
+```
+
+```{r}
+adjusted_non_response %>% 
+  select(
+    county, eligibility_not_determined, ineligible, 
+    eligibility_determined, non_response, adjusted_non_response
+  ) %>% 
+  kbl(
+    col.names = c(
+      "County", "Eligibility Not Determined", "Ineligible",
+      "Eligibility Determined", "Non-Response", "Adjusted Non-Response"
+    ),
+    digits = c(rep(0, 5), 1)
+  ) %>% 
+  kable_styling()
+```
+
+### Perceived demographics by eligibility determination status
+Respondents' perceived demographics are similar for those with and without eligibility determinations. This provides assurance that the ineligibility rate among those with determinations can be used to impute the number of likely ineligibility for those without determinations. 
+
+```{r}
+#| fig-height: 8
+#| fig-width: 11
+#| column: page-inset-right
+eligibility_determination = surveys %>% 
+  mutate(
+    eligibility_determined = factor(
+      eligibility_determined,
+      levels = c(TRUE, FALSE),
+      labels = c("Eligibility Determined", "Eligibility Not Determined")
+    )
+  )
+
+demographic_categories = c(
+  "age", "disability", "gender", "intoxication", "race"
+)
+
+eligibility_determination_plots = map(
+  demographic_categories,
+  function(var_stem) {
+    var = paste0("perceived_", var_stem)
+    eligibility_determination %>% 
+      count(eligibility_determined, .data[[var]]) %>% 
+      mutate(category = var) %>% 
+      rename(subcategory = all_of(var)) %>% 
+      ggplot(
+        aes(
+          x = eligibility_determined,
+          y = n,
+          fill = subcategory
+        )
+      ) +
+      geom_col(position = "fill") +
+      scale_y_continuous(name = NULL, labels = scales::percent) +
+      labs(x = NULL) +
+      guides(
+        fill = guide_legend(
+          title = str_to_sentence(var_stem)
+        )
+      ) +
+      theme(
+        panel.grid.major.x = element_blank()
+      )
+  }
+)
+
+plot_grid(
+  plotlist = eligibility_determination_plots,
+  ncol = 2,
+  align = "hv",
+  axis = "rl"
+)
+```
+
+## Adjusted non-response rate
+
+The adjusted non-response rate is then the adjusted non-response count divided by the sum of the adjusted non-response count and the responses:
+
+$$ Adjusted\ Non\ Response\ Rate = \frac{Adjusted\ Non\ Response}{Response + Adjusted\ Non\ Response} $$
+
+The adjusted non-response rate is slightly lower than the unadjusted rate:
+
+```{r}
+#| echo: true
+non_response_rate = surveys %>% 
+  group_by(county) %>% 
+  summarise(
+    approached = n(),
+    across(
+      c(response, non_response, ineligible, eligibility_determined),
+      sum, na.rm = TRUE
+    )
+  ) %>% 
+  mutate(eligibility_not_determined = approached - eligibility_determined) %>% 
+  adorn_totals() %>% 
+  mutate(
+    adjusted_non_response = 
+      non_response - eligibility_not_determined * ineligible / eligibility_determined,
+    unadjusted_non_response_rate = 
+      non_response / (response + non_response),
+    adjusted_non_response_rate = 
+      adjusted_non_response / (response + adjusted_non_response),
+    non_response_rate = non_response / (response + non_response)
+  ) 
+```
+
+```{r}
+non_response_rate %>% 
+  select(
+    county, response, adjusted_non_response,
+    adjusted_non_response_rate, non_response, non_response_rate
+  ) %>% 
+  kbl(
+    col.names = c(
+      "County", "Response", "Non-Response", "Rate", "Non-Response", "Rate"
+    ),
+    digits = c(0, 0, 1, 3, 0, 3)) %>% 
+  add_header_above(c(" " = 2, "Adjusted" = 2, "Unadjusted" = 2)) %>% 
+  kable_styling()
+```
+
+# Non-response by perceived demographics
+
+## Perceived demographic missingness
+```{r}
+#| echo: true
+demo_missingness = surveys %>%
+  group_by(county) %>% 
+  summarise(
+    approached = n(),
+    one_plus_missing = sum(
+      perceived_age == "Missing" |
+      perceived_disability == "Missing" |
+      perceived_intoxication == "Missing" |
+      perceived_gender == "Missing" |
+      perceived_race == "Missing"
+    ),
+    across(
+      c(
+        perceived_age, perceived_disability,
+        perceived_intoxication, perceived_gender, perceived_race
+      ),
+      ~ sum(.x == "Missing")
+    )
+  ) %>% 
+  adorn_totals() %>% 
+  mutate(
+    across(
+      c(
+        one_plus_missing, perceived_age, perceived_disability,
+        perceived_intoxication, perceived_gender,  perceived_race
+      ),
+      ~ .x / approached
+    )
+  )
+```
+
+```{r}
+demo_missingness %>% 
+  select(-approached) %>% 
+  kbl(
+    col.names = c(
+      "County", "1+ Missing", "Age", "Disability",
+      "Intoxication", "Gender", "Race"
+    ),
+    digits = 3
+  ) %>% 
+  kable_styling()
+```
+
+## Survey outcomes by perceived gender
+```{r}
+outcome_by_gender = surveys %>%
+  group_by(perceived_gender) %>% 
+  summarise(
+    approached = n(),
+    eligibility_determined = sum(eligibility_determined),
+    ineligible = sum(ineligible),
+    non_response = sum(non_response),
+    response = sum(response)
+  ) %>% 
+  adorn_totals() %>% 
+  mutate(
+    ineligible = ineligible / eligibility_determined,
+    eligibility_determined = eligibility_determined / approached,
+    non_response = non_response / (non_response + response)
+  )
+```
+
+```{r}
+outcome_by_gender %>% 
+  select(
+    perceived_gender, approached, eligibility_determined,
+    ineligible, non_response
+  ) %>% 
+  kbl(
+    col.names = c(
+      "Gender", "Approached", "Eligibility Determined",
+      "Ineligible", "Non-Response"
+    ),
+    digits = c(rep(0, 2), rep(3, 3))
+  ) %>% 
+  kable_styling()
+```
+
+
