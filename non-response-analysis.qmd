@@ -400,10 +400,10 @@ demo_missingness %>%
   kable_styling()
 ```
 
-## Survey outcomes by perceived gender
 ```{r}
-outcome_by_gender = surveys %>%
-  group_by(perceived_gender) %>% 
+outcome_by_demo = function(demo) {
+  surveys %>%
+  group_by({{ demo }}) %>% 
   summarise(
     approached = n(),
     eligibility_determined = sum(eligibility_determined),
@@ -416,23 +416,52 @@ outcome_by_gender = surveys %>%
     ineligible = ineligible / eligibility_determined,
     eligibility_determined = eligibility_determined / approached,
     non_response = non_response / (non_response + response)
-  )
-```
-
-```{r}
-outcome_by_gender %>% 
-  select(
-    perceived_gender, approached, eligibility_determined,
-    ineligible, non_response
   ) %>% 
+  select(
+    {{ demo }}, approached, eligibility_determined,
+    ineligible, non_response
+  )
+}
+
+outcome_by_demo_table = function(outcomes, demo_label) {
+  outcomes %>% 
   kbl(
     col.names = c(
-      "Gender", "Approached", "Eligibility Determined",
+      demo_label, "Approached", "Eligibility Determined",
       "Ineligible", "Non-Response"
     ),
     digits = c(rep(0, 2), rep(3, 3))
   ) %>% 
   kable_styling()
+}
 ```
 
+## Perceived age
+```{r}
+outcome_by_demo(perceived_age) %>% 
+  outcome_by_demo_table("Age")
+```
 
+## Perceived disability
+```{r}
+outcome_by_demo(perceived_disability) %>% 
+  outcome_by_demo_table("Disability")
+```
+
+## Perceived gender
+```{r}
+outcome_by_demo(perceived_gender) %>% 
+  outcome_by_demo_table("Gender")
+```
+
+## Perceived intoxication
+```{r}
+outcome_by_demo(perceived_intoxication) %>% 
+  outcome_by_demo_table("Intoxication")
+```
+
+## Perceived race
+```{r}
+outcome_by_demo(perceived_race) %>% 
+  outcome_by_demo_table("Race")
+```
