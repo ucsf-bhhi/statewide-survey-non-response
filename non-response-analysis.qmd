@@ -465,3 +465,65 @@ outcome_by_demo(perceived_intoxication) %>%
 outcome_by_demo(perceived_race) %>% 
   outcome_by_demo_table("Race")
 ```
+
+# Perceived demographics reliability
+
+```{r}
+demo_reliability_data = surveys %>% 
+  filter(response) %>% 
+  mutate(
+    actual_age = cut(
+      age_self_report,
+      c(17, 24, 54, Inf),
+      c("18-24  years old", "25-54 years old", "55+ years old")
+    ),
+    actual_age = fct_explicit_na(actual_age, "Missing"),
+    age_match = actual_age == perceived_age,
+    actual_disability = fct_recode(
+      fct_explicit_na(as_factor(disability_2), "Missing"),
+      "Disabled" = "Yes",
+      "Not Disabled" = "No",
+      "Missing" = "Refused",
+      "Missing" = "Dont know"
+    ),
+    disability_match = actual_disability == perceived_disability,
+    actual_gender = fct_recode(
+      fct_explicit_na(as_factor(gender_3cat), "Missing"),
+      "Male" = "Male [cisgender]",
+      "Female" = "Female [cisgender]",
+      "Transgender" = "Other [transgender, genderqueer, etc]"
+    ),
+    gender_match = actual_gender == perceived_gender,
+    actual_race = fct_recode(
+      fct_explicit_na(as_factor(race_7cat), "Missing"),
+      "Asian/Pacific Islander" = "NH AAPI",
+      "Black" = "NH Black",
+      "White" = "NH White",
+      "Latinx" = "Latinx/Hispanic",
+      "Native American" = "NH Native American/Alaskan",
+      "Multiracial" = "NH Multiracial",
+      "Other" = "NH Other"
+    ),
+    race_match = actual_race == perceived_race,
+  )
+
+demo_reliability_data %>% 
+  summarise(
+    age_n = sum(perceived_age != "Missing" & actual_age != "Missing"),
+    age_match = sum(age_match[perceived_age != "Missing" & actual_age != "Missing"]),
+    disability_n = sum(perceived_disability != "Missing" & actual_disability!= "Missing"),
+    disability_match = sum(disability_match[perceived_disability != "Missing" & actual_disability != "Missing"]),
+    gender_n = sum(perceived_gender != "Missing" & actual_gender != "Missing"),
+    gender_match = sum(gender_match[perceived_gender != "Missing" & actual_gender != "Missing"]),
+    race_n = sum(perceived_race != "Missing" & actual_race != "Missing"),
+    race_match = sum(race_match[perceived_race != "Missing" & actual_race != "Missing"])
+  ) %>% 
+  pivot_longer(cols = everything(), names_to = c("demo", "stat"), names_sep = "_", values_to = "value") %>% 
+  pivot_wider(names_from = stat, names_sort = TRUE, values_from = value) %>% 
+  mutate(match_rate = match / n) %>% 
+  ggplot(aes(x = match_rate, y = fct_rev(str_to_sentence(demo)))) +
+  geom_point(size = 12, fill = bhhi_accent()) + 
+  geom_text(aes(label = scales::percent(match_rate, 1)), color = "grey95") +
+  scale_x_continuous(name = NULL, limits = 0:1, labels = scales::percent) +
+  labs(y = NULL)
+```
