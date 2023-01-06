@@ -128,15 +128,15 @@
     },
     "bhhi.doc": {
       "Package": "bhhi.doc",
-      "Version": "0.2.0",
+      "Version": "0.2.1",
       "Source": "GitHub",
       "RemoteType": "github",
       "RemoteUsername": "ucsf-bhhi",
       "RemoteRepo": "bhhi.doc",
       "RemoteRef": "HEAD",
-      "RemoteSha": "a0c0ff92cebac4d56b89218c4bb751e5cd8e2e7b",
+      "RemoteSha": "e81aee187421f8102805b82f62d3ea13a76d7a4c",
       "RemoteHost": "api.github.com",
-      "Hash": "3a0d1ef545b1b1f345801a84585ce186",
+      "Hash": "00e26d335cbb7a5a90e738914d872979",
       "Requirements": [
         "fs",
         "ggplot2",

@@ -156,9 +156,9 @@ tbl_graph(nodes, edges) %>%
   scale_color_manual(
     name = NULL,
     values = c(
-      "Response" = thematic::thematic_get_theme()$qualitative[2],
-      "Non-Response"= thematic::thematic_get_theme()$qualitative[6],
-      "Excluded" = thematic::thematic_get_theme()$qualitative[5],
+      "Response" = bhhi_palette("green"),
+      "Non-Response"= bhhi_palette("red"),
+      "Excluded" = bhhi_palette("grey"),
       "Intermediate" = "black"
     ),
     breaks = c("Response", "Non-Response", "Excluded")
