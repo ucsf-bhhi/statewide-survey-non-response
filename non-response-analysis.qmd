@@ -96,7 +96,11 @@ surveys = read_rds("Y:/Research/BHHI/statewide_survey_processed_data/latest/stat
       "Multiracial" = "Mixed/Multiracial",
       "Other" = "Different race or ethnic ID, or unclear",
       "Missing" = "FIX CODING ERROR"
-    )
+    ),
+    across(
+      c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, sort),
+    across(
+      c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, "Missing", after = Inf)
   )
 ```
 
