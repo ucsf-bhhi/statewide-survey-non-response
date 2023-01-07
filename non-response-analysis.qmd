@@ -574,22 +574,39 @@ demo_reliability_data = surveys %>%
 demo_reliability_data %>% 
   summarise(
     age_n = sum(perceived_age != "Missing" & actual_age != "Missing"),
-    age_match = sum(age_match[perceived_age != "Missing" & actual_age != "Missing"]),
-    disability_n = sum(perceived_disability != "Missing" & actual_disability!= "Missing"),
-    disability_match = sum(disability_match[perceived_disability != "Missing" & actual_disability != "Missing"]),
+    age_match = sum(
+      age_match[perceived_age != "Missing" & actual_age != "Missing"]
+    ),
+    disability_n = sum(
+      perceived_disability != "Missing" & actual_disability!= "Missing"
+    ),
+    disability_match = sum(
+      disability_match[
+        perceived_disability != "Missing" & actual_disability != "Missing"
+      ]
+    ),
     gender_n = sum(perceived_gender != "Missing" & actual_gender != "Missing"),
-    gender_match = sum(gender_match[perceived_gender != "Missing" & actual_gender != "Missing"]),
+    gender_match = sum(
+      gender_match[perceived_gender != "Missing" & actual_gender != "Missing"]
+    ),
     race_n = sum(perceived_race != "Missing" & actual_race != "Missing"),
-    race_match = sum(race_match[perceived_race != "Missing" & actual_race != "Missing"])
+    race_match = sum(
+      race_match[perceived_race != "Missing" & actual_race != "Missing"]
+    )
   ) %>% 
-  pivot_longer(cols = everything(), names_to = c("demo", "stat"), names_sep = "_", values_to = "value") %>% 
+  pivot_longer(
+    cols = everything(),
+    names_to = c("demo", "stat"), names_sep = "_",
+    values_to = "value"
+  ) %>% 
   pivot_wider(names_from = stat, names_sort = TRUE, values_from = value) %>% 
   mutate(match_rate = match / n) %>% 
   ggplot(aes(x = match_rate, y = fct_rev(str_to_sentence(demo)))) +
-  geom_point(size = 12, fill = bhhi_accent()) + 
+  geom_point(size = 12, color = bhhi_accent(), fill = bhhi_accent(), pch = 21) +
   geom_text(aes(label = scales::percent(match_rate, 1)), color = "grey95") +
   scale_x_continuous(name = NULL, limits = 0:1, labels = scales::percent) +
   labs(
+    title = "Share of respondents with same actual and perceived demographic",
     y = NULL,
     caption = paste(
       "Results are unweighted.",
