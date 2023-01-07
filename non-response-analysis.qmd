@@ -101,6 +101,7 @@ surveys = read_rds("Y:/Research/BHHI/statewide_survey_processed_data/latest/stat
 ```
 
 ```{r}
+#| fig-height: 8.1
 nodes = surveys %>% 
   summarise(
     approached = n(),
@@ -164,10 +165,18 @@ tbl_graph(nodes, edges) %>%
     breaks = c("Response", "Non-Response", "Excluded")
   ) +
   coord_cartesian(xlim = c(-1.6, 1.4)) +
-  theme(legend.position = c(0.9, 0.25))
+  theme(legend.position = c(0.9, 0.25)) +
+  labs(caption = "Note: All counts are unweighted.")
 ```
 
 # Non-response rate
+
+```{r}
+weighted_sum = function(var, weight) {
+  sum(var * weight, na.rm = TRUE)
+}
+```
+
 
 ## Initial calculation
 
@@ -182,7 +191,7 @@ initial_non_response = surveys %>%
   group_by(county) %>% 
   summarise(
     approached = n(),
-    across(c(response, non_response), sum)
+    across(c(response, non_response), weighted_sum, initial_weight)
   ) %>%
   adorn_totals() %>% 
   mutate(
@@ -191,6 +200,17 @@ initial_non_response = surveys %>%
 ```
 
 ```{r}
+weight_note_text = 
+  "Weighted with inverse venue & individual selection probabilities."
+weight_note = function(kbl) {
+  kbl %>% 
+    add_footnote(
+      paste0("<div class=kbl-fn>", weight_note_text,"</div>"),
+      notation = "none",
+      escape = FALSE
+    )
+}
+        
 initial_non_response %>% 
   relocate(non_response, .after = approached) %>% 
   kbl(
@@ -200,7 +220,8 @@ initial_non_response %>%
     ),
     digits = c(rep(0, 4), 3)
   ) %>% 
-  kable_styling()
+  kable_styling() %>% 
+  weight_note()
 ```
 
 ## Adjusting the non-responses for eligibility
@@ -220,8 +241,8 @@ Ultimately, the adjustment does not have a large effect as the adjustment is sma
 adjusted_non_response = surveys %>% 
   group_by(county) %>% 
   summarise(
-    approached = n(),
-    across(c(non_response, eligibility_determined, ineligible), sum)
+    approached = sum(initial_weight, na.rm = TRUE),
+    across(c(non_response, eligibility_determined, ineligible), weighted_sum, initial_weight)
   ) %>%
   mutate(eligibility_not_determined = approached - eligibility_determined) %>% 
   adorn_totals() %>% 
@@ -244,7 +265,8 @@ adjusted_non_response %>%
     ),
     digits = c(rep(0, 5), 1)
   ) %>% 
-  kable_styling()
+  kable_styling %>% 
+  weight_note()
 ```
 
 ### Perceived demographics by eligibility determination status
@@ -317,10 +339,10 @@ The adjusted non-response rate is slightly lower than the unadjusted rate:
 non_response_rate = surveys %>% 
   group_by(county) %>% 
   summarise(
-    approached = n(),
+    approached = sum(initial_weight, na.rm = TRUE),
     across(
       c(response, non_response, ineligible, eligibility_determined),
-      sum, na.rm = TRUE
+      weighted_sum, initial_weight
     )
   ) %>% 
   mutate(eligibility_not_determined = approached - eligibility_determined) %>% 
@@ -348,7 +370,8 @@ non_response_rate %>%
     ),
     digits = c(0, 0, 1, 3, 0, 3)) %>% 
   add_header_above(c(" " = 2, "Adjusted" = 2, "Unadjusted" = 2)) %>% 
-  kable_styling()
+  kable_styling() %>% 
+  weight_note()
 ```
 
 # Non-response by perceived demographics
@@ -397,7 +420,12 @@ demo_missingness %>%
     ),
     digits = 3
   ) %>% 
-  kable_styling()
+  kable_styling() %>% 
+  add_footnote(
+    "<div class=kbl-fn>Table is unweighted.</div>",
+    notation = "none",
+    escape = FALSE
+  )
 ```
 
 ```{r}
@@ -405,11 +433,15 @@ outcome_by_demo = function(demo) {
   surveys %>%
   group_by({{ demo }}) %>% 
   summarise(
-    approached = n(),
-    eligibility_determined = sum(eligibility_determined),
-    ineligible = sum(ineligible),
-    non_response = sum(non_response),
-    response = sum(response)
+    n = n(),
+    approached = sum(initial_weight, na.rm = TRUE),
+    eligibility_determined = weighted_sum(
+      eligibility_determined,
+      initial_weight
+    ),
+    ineligible = weighted_sum(ineligible, initial_weight),
+    non_response = weighted_sum(non_response, initial_weight),
+    response = weighted_sum(response, initial_weight)
   ) %>% 
   adorn_totals() %>% 
   mutate(
@@ -418,21 +450,22 @@ outcome_by_demo = function(demo) {
     non_response = non_response / (non_response + response)
   ) %>% 
   select(
-    {{ demo }}, approached, eligibility_determined,
+    {{ demo }}, n, eligibility_determined,
     ineligible, non_response
   )
 }
 
 outcome_by_demo_table = function(outcomes, demo_label) {
   outcomes %>% 
-  kbl(
-    col.names = c(
-      demo_label, "Approached", "Eligibility Determined",
-      "Ineligible", "Non-Response"
-    ),
-    digits = c(rep(0, 2), rep(3, 3))
-  ) %>% 
-  kable_styling()
+    kbl(
+      col.names = c(
+        demo_label, "N", "Eligibility Determined",
+        "Ineligible", "Non-Response"
+      ),
+      digits = c(rep(0, 2), rep(3, 3))
+    ) %>% 
+    kable_styling() %>% 
+    weight_note()
 }
 ```
 
@@ -525,5 +558,12 @@ demo_reliability_data %>%
   geom_point(size = 12, fill = bhhi_accent()) + 
   geom_text(aes(label = scales::percent(match_rate, 1)), color = "grey95") +
   scale_x_continuous(name = NULL, limits = 0:1, labels = scales::percent) +
-  labs(y = NULL)
+  labs(
+    y = NULL,
+    caption = paste(
+      "Results are unweighted.",
+      "Respondents missing either an actual or perceived demographic are excluded for that demographic.", 
+      sep = "\n"
+    )
+  )
 ```
