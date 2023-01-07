@@ -362,8 +362,7 @@ non_response_rate = surveys %>%
     unadjusted_non_response_rate = 
       non_response / (response + non_response),
     adjusted_non_response_rate = 
-      adjusted_non_response / (response + adjusted_non_response),
-    non_response_rate = non_response / (response + non_response)
+      adjusted_non_response / (response + adjusted_non_response)
   ) 
 ```
 
@@ -371,7 +370,7 @@ non_response_rate = surveys %>%
 non_response_rate %>% 
   select(
     county, response, adjusted_non_response,
-    adjusted_non_response_rate, non_response, non_response_rate
+    adjusted_non_response_rate, non_response, unadjusted_non_response_rate
   ) %>% 
   kbl(
     col.names = c(
