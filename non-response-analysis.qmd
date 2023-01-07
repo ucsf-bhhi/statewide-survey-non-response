@@ -382,6 +382,27 @@ non_response_rate %>%
   weight_note()
 ```
 
+The non-response rate substantially declines with the order in which we visited the counties.
+
+```{r}
+non_response_rate %>% 
+  ungroup() %>% 
+  filter(county != "Total") %>% 
+  mutate(county = factor(county, levels(surveys$county), ordered = TRUE)) %>% 
+  arrange(county) %>% 
+  ggplot(aes(x = county, y = adjusted_non_response_rate)) + 
+  geom_point() +
+  geom_smooth(aes(x = 1:8), method = "lm", se = FALSE) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.35)) +
+  labs(
+    title = "Non-response rate by county",
+    subtitle = "Counties in order of visit",
+    x = NULL,
+    y = NULL
+  )
+```
+
+
 # Non-response by perceived demographics
 
 ## Perceived demographic missingness
