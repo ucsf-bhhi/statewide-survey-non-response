@@ -439,6 +439,8 @@ demo_missingness = surveys %>%
   )
 ```
 
+Overall, the missingness in perceived demographics is low, at around `r scales::percent(demo_missingness$one_plus_missing[demo_missingness$county == "Total"])`. Most counties show similarly low levels of missingness, with Placer as a notable exception (although still relatively low, at around `r scales::percent(demo_missingness$one_plus_missing[demo_missingness$county == "Placer"])`).
+
 ```{r}
 demo_missingness %>% 
   select(-approached) %>% 
