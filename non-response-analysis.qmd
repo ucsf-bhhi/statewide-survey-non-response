@@ -15,6 +15,13 @@ library(kableExtra)
 library(ggraph)
 library(cowplot)
 library(tidygraph)
+library(tidymodels)
+library(doFuture)
+
+set.seed(510)
+
+registerDoFuture()
+plan(multisession, workers = 3)
 ```
 
 # Defining responses and non-responses
@@ -614,4 +621,137 @@ demo_reliability_data %>%
       sep = "\n"
     )
   )
+```
+
+# Modeling non-response
+
+## Adjusted non-response weights
+```{r}
+anrr_weights = surveys %>% 
+  mutate(
+    anrr_weight = if_else(
+      eligibility_determined,
+      initial_weight,
+      initial_weight * (sum(eligible) / sum(eligibility_determined))
+    ),
+    anrr_weight = importance_weights(anrr_weight)
+  ) %>% 
+  filter(!ineligible) %>% 
+  select(
+    anrr_weight, non_response, perceived_age, perceived_disability,
+    perceived_gender, perceived_intoxication, perceived_race, county,
+    site_category
+  ) %>% 
+  mutate(
+    across(where(is.factor), fct_drop),
+    across(starts_with("perceived"), fct_recode, NULL = "Missing"),
+    site_category = fct_recode(site_category, "Encampment" = "Hotspot"),
+    non_response = factor(
+      non_response,
+      levels = c(TRUE, FALSE),
+      labels = c("Non-Response", "Response")
+    )
+  ) %>% 
+  drop_na()
+
+anrr_split = initial_split(anrr_weights, strata = non_response)
+
+anrr_folds = vfold_cv(training(anrr_split), v = 10, repeats = 5)
+```
+
+```{r}
+anrr_recipe = anrr_weights %>% 
+  recipe(non_response ~ .) %>% 
+  step_dummy(all_predictors())
+```
+
+```{r}
+logit_glm_model = logistic_reg() %>% 
+  set_engine("glm")
+
+logit_glmnet_model = logistic_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet")
+
+rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+```
+
+```{r}
+models = workflow_set(
+  preproc = list(basic = anrr_recipe),
+  models = list(
+    logit_glm = logit_glm_model,
+    logit_glmnet = logit_glmnet_model,
+    rf = rf_model
+  ),
+  case_weights = anrr_weight
+)
+
+grid_ctrl = control_grid(
+  save_pred = TRUE,
+  allow_par = FALSE,
+  parallel_over = "everything",
+  save_workflow = TRUE
+)
+
+grid_results = models %>% 
+  workflow_map(
+    seed = 510,
+    resamples = anrr_folds,
+    grid = 25,
+    control = grid_ctrl,
+    verbose = TRUE,
+    metrics = metric_set(rmse, roc_auc, accuracy, mn_log_loss, pr_auc, average_precision, f_meas)
+  )
+write_rds(grid_results, "grid_results_with_weights.rds")
+
+autoplot(
+   grid_results,
+   rank_metric = "accuracy",
+   metric = "roc_auc",
+   select_best = TRUE
+)
+
+predictions = collect_predictions(grid_results)
+
+predictions %>% 
+  filter(wflow_id == "basic_logit_glm") %>% 
+  ggplot(aes(x = non_response, y = `.pred_Non-Response`)) +
+  geom_jitter()
+
+best_predictions = collect_predictions(grid_results, select_best = TRUE, metric = "roc_auc")
+```
+
+```{r}
+best_predictions %>% 
+  ggplot(aes(x = `.pred_Non-Response`, y = wflow_id, fill = wflow_id)) +
+  geom_density_ridges() +
+  facet_wrap(vars(non_response), ncol = 1) +
+  guides(fill = "none") +
+  labs(x = "Predicted non-response probability", y = NULL)
+
+best_predictions %>% 
+  ggplot(aes(x = `.pred_Non-Response`, color = wflow_id)) +
+  stat_ecdf()
+
+best_predictions %>% 
+  mutate(
+    pr_bin = cut(
+      `.pred_Non-Response`,
+      breaks = c(seq(0, 0.4, 0.1), 1),
+      labels = seq(0, 0.4, 0.1)
+    ) 
+  ) %>% 
+  group_by(wflow_id, pr_bin) %>% 
+  summarise(
+    n = n(),
+    avg_pred_prob = mean(`.pred_Non-Response`),
+    pct_nonresponse = mean(non_response == "Non-Response")
+  ) %>% 
+  ggplot(aes(x = avg_pred_prob, y = pct_nonresponse, group = wflow_id, color = wflow_id)) +
+  geom_line() +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  scale_y_continuous()
 ```
