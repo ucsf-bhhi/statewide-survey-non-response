@@ -13,15 +13,28 @@ library(tidyverse)
 library(janitor)
 library(kableExtra)
 library(ggraph)
-library(cowplot)
 library(tidygraph)
 library(tidymodels)
-library(doFuture)
+library(doParallel)
+library(ggridges)
+library(stacks)
+library(finetune)
+library(gt)
+library(glue)
 
 set.seed(510)
 
-registerDoFuture()
-plan(multisession, workers = 3)
+if (Sys.info()["sysname"] == "Linux") {
+  cores = ifelse(Sys.getenv("NSLOTS") == "", 3, Sys.getenv("NSLOTS"))
+  cl <- makeForkCluster(cores)
+  registerDoParallel(cl)
+} else {
+  plan(multisession, workers = 3)
+}
+
+tuning_v_folds = 10
+tuning_repeats = 5
+tuning_grid_size = 25
 ```
 
 # Defining responses and non-responses
@@ -32,83 +45,97 @@ Below is a chart that shows the participants' progression through the interview 
 
 ```{r}
 #| echo: true
-surveys = read_rds("Y:/Research/BHHI/statewide_survey_processed_data/latest/statewide_survey_processed.rds") %>% 
-  filter(is.na(rds) | rds == 0) %>% 
-  mutate(
-    county = fct_relevel(
-      as_factor(county),
-      c(
-        "Sonoma",
-        "Placer",
-        "Santa Clara",
-        "Fresno/Madera",
-        "Butte",
-        "Los Angeles",
-        "San Diego",
-        "Sacramento"
-      )
-    ),
-    language_issues = eligible_yn == -4,
-    declined = eligible_yn == -3,
-    could_not_determine_eligibility = eligible_yn == -2,
-    eligibility_determined = eligible_yn >= -1,
-    ineligible = eligible_yn %in% -1:0,
-    eligible = eligible_yn %in% 1:3,
-    consented_at_start = eligible_yn %in% 1:2,
-    did_not_consent = eligible_yn == 3,
-    did_not_finish = consented_at_start & survey_count == 0,
-    response = survey_count == 1,
-    non_response = !(ineligible | survey_count == 1),
-    ## perceived demographics
-    # age
-    perceived_age = fct_explicit_na(as_factor(perceived_age), "Missing"),
-    # disability
-    perceived_disability = fct_explicit_na(
-      as_factor(perceived_disability), "Missing"
-    ),
-    perceived_disability = fct_recode(
-      perceived_disability,
-      "Disabled" = "Yes",
-      "Not Disabled" = "No"
-    ),
-    # intoxication
-    perceived_intoxication = fct_explicit_na(
-      as_factor(perceived_intox), "Missing"
-    ),
-    perceived_intoxication = fct_recode(
-      perceived_intoxication,
-      "Intoxicated" = "Yes",
-      "Not Intoxicated" = "No"
-    ),
-    # gender
-    perceived_gender = fct_explicit_na(
-      as_factor(perceived_gender), "Missing"
-    ),
-    perceived_gender = fct_recode(
-      perceived_gender,
-      "Transgender" = "Transgender, Genderqueer, Gender non-binary or Unclear"
-    ),
-    # race
-    perceived_race = fct_explicit_na(
-      as_factor(perceived_race_onecat), "Missing"
-    ),
-    perceived_race = fct_recode(
-      perceived_race,
-      "Asian/Pacific Islander" = "Asian",
-      "Asian/Pacific Islander" = "Pacific Islander, Samoan, Hawaiian",
-      "Black" = "Black, African-American, African",
-      "White" = "White, Caucasian, European American",
-      "Latinx" = "Latinx, Hispanic, Latin American",
-      "Native American" = "Native American, Alaska Native",
-      "Multiracial" = "Mixed/Multiracial",
-      "Other" = "Different race or ethnic ID, or unclear",
-      "Missing" = "FIX CODING ERROR"
-    ),
-    across(
-      c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, sort),
-    across(
-      c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, "Missing", after = Inf)
-  )
+survey_path = ifelse(
+  Sys.info()["sysname"] == "Linux",
+  # wynton
+  "/wynton/protected/home/kushel/eveperry/statewide-survey/processed-survey-data/statewide_survey_processed.rds",
+  # everywhere else
+  "Y:/Research/BHHI/statewide_survey_processed_data/latest/statewide_survey_processed.rds"
+)
+
+raw_surveys = read_rds(survey_path)
+
+prepare_survey_data = function(data) {
+  data %>% 
+    filter(is.na(rds) | rds == 0) %>% 
+    mutate(
+      county = fct_relevel(
+        as_factor(county),
+        c(
+          "Sonoma",
+          "Placer",
+          "Santa Clara",
+          "Fresno/Madera",
+          "Butte",
+          "Los Angeles",
+          "San Diego",
+          "Sacramento"
+        )
+      ),
+      language_issues = eligible_yn == -4,
+      declined = eligible_yn == -3,
+      could_not_determine_eligibility = eligible_yn == -2,
+      eligibility_determined = eligible_yn >= -1,
+      ineligible = eligible_yn %in% -1:0,
+      eligible = eligible_yn %in% 1:3,
+      consented_at_start = eligible_yn %in% 1:2,
+      did_not_consent = eligible_yn == 3,
+      did_not_finish = consented_at_start & survey_count == 0,
+      response = survey_count == 1,
+      non_response = !(ineligible | survey_count == 1),
+      ## perceived demographics
+      # age
+      perceived_age = fct_explicit_na(as_factor(perceived_age), "Missing"),
+      # disability
+      perceived_disability = fct_explicit_na(
+        as_factor(perceived_disability), "Missing"
+      ),
+      perceived_disability = fct_recode(
+        perceived_disability,
+        "Disabled" = "Yes",
+        "Not Disabled" = "No"
+      ),
+      # intoxication
+      perceived_intoxication = fct_explicit_na(
+        as_factor(perceived_intox), "Missing"
+      ),
+      perceived_intoxication = fct_recode(
+        perceived_intoxication,
+        "Intoxicated" = "Yes",
+        "Not Intoxicated" = "No"
+      ),
+      # gender
+      perceived_gender = fct_explicit_na(
+        as_factor(perceived_gender), "Missing"
+      ),
+      perceived_gender = fct_recode(
+        perceived_gender,
+        "Transgender" = "Transgender, Genderqueer, Gender non-binary or Unclear"
+      ),
+      # race
+      perceived_race = fct_explicit_na(
+        as_factor(perceived_race_onecat), "Missing"
+      ),
+      perceived_race = fct_recode(
+        perceived_race,
+        "Asian/Pacific Islander" = "Asian",
+        "Asian/Pacific Islander" = "Pacific Islander, Samoan, Hawaiian",
+        "Black" = "Black, African-American, African",
+        "White" = "White, Caucasian, European American",
+        "Latinx" = "Latinx, Hispanic, Latin American",
+        "Native American" = "Native American, Alaska Native",
+        "Multiracial" = "Mixed/Multiracial",
+        "Other" = "Different race or ethnic ID, or unclear",
+        "Missing" = "FIX CODING ERROR"
+      ),
+      across(
+        c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, sort),
+      across(
+        c(perceived_age, perceived_disability, perceived_gender, perceived_intoxication, perceived_race), fct_relevel, "Missing", after = Inf)
+    )
+}
+
+surveys = prepare_survey_data(raw_surveys)
 ```
 
 ```{r}
@@ -169,7 +196,7 @@ tbl_graph(nodes, edges) %>%
     name = NULL,
     values = c(
       "Response" = bhhi_palette("green"),
-      "Non-Response"= bhhi_palette("red"),
+      "Non-Response" = bhhi_palette("red"),
       "Excluded" = bhhi_palette("grey"),
       "Intermediate" = "black"
     ),
@@ -537,6 +564,12 @@ outcome_by_demo(perceived_race) %>%
   outcome_by_demo_table("Race")
 ```
 
+## Site category
+```{r}
+outcome_by_demo(site_category) %>% 
+  outcome_by_demo_table("Site category")
+```
+
 # Perceived demographics reliability
 
 ```{r}
@@ -626,116 +659,386 @@ demo_reliability_data %>%
 # Modeling non-response
 
 ## Adjusted non-response weights
+
+We adjust the weights of the respondents without an eligibility determination such that the weighted average non-resonse rate equals the adjusted non-response weight above. The weight adjustment is the unweighted rate of eligibility for the survey:
+
+$$ Adjusted\ nonreponse\ weights_{eligibility\ not\ determined} = initial\_weight * \frac{\sum{eligible}}{\sum{eligibility\ determined}}$$
+
+Then, we use these weights to predict non-response. The predictors in the model are county and the perceived demographics (age, disability, gender, intoxication, and race).
+
 ```{r}
-anrr_weights = surveys %>% 
-  mutate(
-    anrr_weight = if_else(
-      eligibility_determined,
-      initial_weight,
-      initial_weight * (sum(eligible) / sum(eligibility_determined))
-    ),
-    anrr_weight = importance_weights(anrr_weight)
-  ) %>% 
-  filter(!ineligible) %>% 
-  select(
-    anrr_weight, non_response, perceived_age, perceived_disability,
-    perceived_gender, perceived_intoxication, perceived_race, county,
-    site_category
-  ) %>% 
-  mutate(
-    across(where(is.factor), fct_drop),
-    across(starts_with("perceived"), fct_recode, NULL = "Missing"),
-    site_category = fct_recode(site_category, "Encampment" = "Hotspot"),
-    non_response = factor(
-      non_response,
-      levels = c(TRUE, FALSE),
-      labels = c("Non-Response", "Response")
-    )
-  ) %>% 
-  drop_na()
+#| echo: true
+prepare_model_data = function(data) {
+  data %>% 
+    mutate(
+      anrr_weight = if_else(
+        eligibility_determined,
+        initial_weight,
+        initial_weight * (sum(eligible) / sum(eligibility_determined))
+      ),
+      anrr_weight = importance_weights(anrr_weight)
+    ) %>% 
+    filter(!ineligible) %>% 
+    select(
+      anrr_weight, non_response, perceived_age, perceived_disability,
+      perceived_gender, perceived_intoxication, perceived_race, county,
+      site_category, record_id
+    ) %>% 
+    mutate(
+      across(where(is.factor), fct_drop),
+      across(starts_with("perceived"), fct_recode, NULL = "Missing"),
+      site_category = fct_recode(
+        site_category,
+        "Encampment" = "Hotspot",
+        NULL = ""
+      ),
+      non_response = factor(
+        non_response,
+        levels = c(FALSE, TRUE),
+        labels = c("Response", "Non-Response")
+      )
+    ) %>% 
+    filter(!is.na(anrr_weight))
+}
 
-anrr_split = initial_split(anrr_weights, strata = non_response)
-
-anrr_folds = vfold_cv(training(anrr_split), v = 10, repeats = 5)
+anrr_weights = prepare_model_data(surveys) 
 ```
 
+## Candidate models
+
+To predict non-response, we evaluate a set of individual models and an ensemble model that combines the individual models.
+
+The only pre-processing step is to turn categorical variables into sets of dummy variables.
+
 ```{r}
-anrr_recipe = anrr_weights %>% 
-  recipe(non_response ~ .) %>% 
+#| echo: true
+
+reference_levels = c(
+  perceived_age = "18-24  years old",
+  perceived_disability = "Not Disabled",
+  perceived_gender = "Male",
+  perceived_intoxication = "Not Intoxicated",
+  perceived_race = "White",
+  county = "Los Angeles",
+  site_category = "Emergency Shelter"
+)
+
+anrr_recipe = anrr_weights %>%
+  recipe(non_response ~ .) %>%
+  update_role(record_id, new_role = "id variable") %>% 
+  step_unknown(all_factor_predictors(), new_level = "Missing") %>%
+  step_relevel(
+    perceived_age,
+    ref_level = reference_levels["perceived_age"]
+  ) %>%
+  step_relevel(
+    perceived_disability,
+    ref_level = reference_levels["perceived_disability"]
+  ) %>%
+  step_relevel(
+    perceived_gender,
+    ref_level = reference_levels["perceived_gender"]
+  ) %>%
+  step_relevel(
+    perceived_intoxication,
+    ref_level = reference_levels["perceived_intoxication"]
+  ) %>%
+  step_relevel(
+    perceived_race,
+    ref_level = reference_levels["perceived_race"]
+  ) %>%
+  step_relevel(
+    county,
+    ref_level = reference_levels["county"]
+  ) %>%
+  step_relevel(
+    site_category,
+    ref_level = reference_levels["site_category"]
+  ) %>%
   step_dummy(all_predictors())
 ```
 
+
+To allow for proper evaluation of our predictions, we first split the data into training (75% of the data) and test (25% of the data) sets.
+
 ```{r}
-logit_glm_model = logistic_reg() %>% 
+#| echo: true
+
+anrr_split = initial_split(anrr_weights, strata = non_response)
+```
+
+To select the parameters for the models, we evaluate a random grid with `r tuning_grid_size` combinations of parameters with `r tuning_v_folds`-fold cross validation repeated `r tuning_repeats` times.
+
+```{r}
+#| echo: true
+
+anrr_folds = vfold_cv(
+  training(anrr_split), v = tuning_v_folds, repeats = tuning_repeats
+)
+```
+
+### Individual models
+
+The 5 individual models are: logistic regression (base R), logistic regression with lasso (`glmnet` package), random forest (`ranger` package), neural net (`nnet` packages), and gradient boosted trees (`xgboost` package). We also evaluate a stacked ensemble of 5 models.
+
+```{r}
+#| echo: true
+
+logit_glm_model = logistic_reg() %>%
+  set_mode("classification") %>% 
   set_engine("glm")
 
 logit_glmnet_model = logistic_reg(penalty = tune(), mixture = tune()) %>% 
+  set_mode("classification") %>% 
   set_engine("glmnet")
 
 rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
   set_mode("classification") %>% 
   set_engine("ranger")
+
+nn_model = mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("nnet")
+
+xgboost_model = boost_tree(
+  trees = tune(), min_n = tune(), tree_depth = tune(), learn_rate = tune(), 
+  loss_reduction = tune(), sample_size = tune()
+) %>% 
+  set_mode("classification") %>% 
+  set_engine("xgboost")
 ```
 
 ```{r}
-models = workflow_set(
+#| echo: true
+
+weight_models = workflow_set(
   preproc = list(basic = anrr_recipe),
   models = list(
     logit_glm = logit_glm_model,
     logit_glmnet = logit_glmnet_model,
-    rf = rf_model
+    random_forest = rf_model,
+    xgboost = xgboost_model
   ),
   case_weights = anrr_weight
 )
 
-grid_ctrl = control_grid(
-  save_pred = TRUE,
-  allow_par = FALSE,
-  parallel_over = "everything",
-  save_workflow = TRUE
+no_weight_models = workflow_set(
+  preproc = list(basic = anrr_recipe),
+  models = list(
+    neural_net = nn_model
+  )
 )
 
-grid_results = models %>% 
+tune_metrics = metric_set(
+  roc_auc, accuracy, mn_log_loss, pr_auc, average_precision, f_meas
+)
+
+race_ctrl = control_race(
+  save_pred = TRUE,
+  allow_par = TRUE,
+  parallel_over = "everything",
+  save_workflow = TRUE,
+  verbose_elim = TRUE
+)
+
+weight_results = weight_models %>%
   workflow_map(
     seed = 510,
+    fn = "tune_race_anova",
     resamples = anrr_folds,
-    grid = 25,
-    control = grid_ctrl,
+    grid = tuning_grid_size,
+    control = race_ctrl,
     verbose = TRUE,
-    metrics = metric_set(rmse, roc_auc, accuracy, mn_log_loss, pr_auc, average_precision, f_meas)
+    metrics = tune_metrics
   )
-write_rds(grid_results, "grid_results_with_weights.rds")
 
-autoplot(
-   grid_results,
-   rank_metric = "accuracy",
-   metric = "roc_auc",
-   select_best = TRUE
-)
+no_weight_results = no_weight_models %>%
+  workflow_map(
+    seed = 510,
+    fn = "tune_race_anova",
+    resamples = anrr_folds,
+    grid = tuning_grid_size,
+    control = race_ctrl,
+    verbose = TRUE,
+    metrics = tune_metrics
+  )
 
-predictions = collect_predictions(grid_results)
-
-predictions %>% 
-  filter(wflow_id == "basic_logit_glm") %>% 
-  ggplot(aes(x = non_response, y = `.pred_Non-Response`)) +
-  geom_jitter()
-
-best_predictions = collect_predictions(grid_results, select_best = TRUE, metric = "roc_auc")
+grid_results = bind_rows(weight_results, no_weight_results)
 ```
 
 ```{r}
+write_rds(grid_results, "grid_results.rds")
+```
+
+### Ensemble model
+
+We create the ensemble model by stacking the predicted probabilities from the individual models and then using those predicted probabilities to model non-response.
+
+```{r ensemble_stack}
+#| echo: true
+
+ensemble_stack = stacks() %>% 
+  add_candidates(candidates = grid_results) %>% 
+  stacks:::process_data_stack()
+```
+
+To evaluate the ensemble we reassemble the cross-validation folds, using the model predictions instead of the observed data.
+
+```{r ensemble_folds}
+#| echo: true
+
+ensemble_folds = anrr_folds %>%
+  tidy() %>% 
+  chop(Row) %>% 
+  pivot_wider(names_from = Data, values_from = Row) %>% 
+  select(Analysis, Assessment) %>% 
+  pmap(
+    function(Analysis, Assessment)
+      list(analysis = Analysis, assessment = Assessment)
+  ) %>% 
+  map(make_splits, ensemble_stack) %>% 
+  manual_rset(
+    map2_chr(anrr_folds$id, anrr_folds$id2, paste, sep = "_")
+  ) 
+```
+
+Then we fit LASSO logistic regressions with a set of candidate penalty terms
+
+```{r ensemble_tuning}
+#| echo: true
+ensemble_penalty_candidates = 10^seq(-2, -0.5, length = 20)
+
+ensemble_wflow = workflow() %>% 
+  add_model(
+    logistic_reg(penalty = tune(), mixture = tune()) %>% 
+      set_engine("glmnet") %>% 
+      set_mode("classification")
+  ) %>% 
+  add_recipe(
+    recipe(
+      non_response ~ .,
+      data = ensemble_stack
+    )
+  )
+
+ensemble_results = tune_grid(
+  ensemble_wflow,
+  resamples = ensemble_folds,
+  grid = expand_grid(
+    penalty = ensemble_penalty_candidates,
+    mixture = 1
+  ),
+  metrics = tune_metrics,
+  control = control_grid(
+    save_pred = TRUE,
+    allow_par = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE
+  )
+) 
+
+ensemble_set = as_workflow_set(ensemble = ensemble_results)
+```
+
+```{r}
+write_rds(ensemble_set, "ensemble_set.rds")
+```
+
+## Selecting a model
+
+We selected the logistic regression because it is the simplest model and there are no other models with statistically significant performance increases.
+
+### Area under the receiver operator curve
+
+While the ensemble and neural net have slightly higher AUC, the advantage over the logistic regression is not statistically significant.
+
+```{r}
+#| echo: true
+selection_metric = "roc_auc"
+
+best_ensemble_metrics = rank_results(
+  ensemble_set, rank_metric = selection_metric, select_best = TRUE
+) %>% 
+  filter(.metric == selection_metric) %>%
+  mutate(model_label = "ensemble")
+
+best_metrics = rank_results(
+  grid_results, rank_metric = selection_metric, select_best = TRUE
+) %>% 
+  filter(.metric == selection_metric) %>%
+  mutate(model_label = str_remove(wflow_id, "basic_"))
+
+best_metrics  %>% 
+  bind_rows(best_ensemble_metrics) %>%
+  mutate(rank = min_rank(-1 * mean)) %>% 
+  arrange(rank) %>% 
+  ggplot(aes(x = rank, y = mean, color = model_label)) +
+  geom_errorbar(
+    aes(
+      ymin = mean - 1.96 * std_err,
+      ymax = mean + 1.96 * std_err
+    )
+  ) +
+  geom_point() +
+  scale_x_continuous(breaks = scales::breaks_width(1)) +
+  labs(
+    title = "Area under the receiver operator curve",
+    x = "Rank",
+    y = NULL,
+    color = NULL
+  )
+```
+
+### Predicted probability distribution
+
+The logistic model has a similar probability distribution to the other models and shows no reason to be concerned about its performance.
+
+```{r}
+best_predictions = collect_predictions(
+  grid_results, select_best = TRUE, metric = "roc_auc"
+) %>% 
+  mutate(model_label = str_remove(wflow_id, "basic_"))
+
+ensemble_predictions = collect_predictions(
+  ensemble_set, select_best = TRUE, metric = "roc_auc"
+) %>% 
+  mutate(model_label = "ensemble")
+
 best_predictions %>% 
-  ggplot(aes(x = `.pred_Non-Response`, y = wflow_id, fill = wflow_id)) +
+  bind_rows(ensemble_predictions) %>% 
+  ggplot(aes(x = `.pred_Non-Response`, y = model_label, fill = model_label)) +
   geom_density_ridges() +
+  scale_y_discrete(position = "right") +
   facet_wrap(vars(non_response), ncol = 1) +
   guides(fill = "none") +
-  labs(x = "Predicted non-response probability", y = NULL)
+  labs(
+    title = "Distribution of predicted probability of non-response",
+    subtitle = "By actual response status",
+    x = "Predicted non-response probability",
+    y = NULL
+  )
 
 best_predictions %>% 
-  ggplot(aes(x = `.pred_Non-Response`, color = wflow_id)) +
-  stat_ecdf()
+  bind_rows(ensemble_predictions) %>%
+  ggplot(aes(x = `.pred_Non-Response`, color = model_label)) +
+  stat_ecdf() +
+  labs(
+    title = "Cumulative distribution of predicted probability of non-response",
+    x = "Predicted non-response probability",
+    y = NULL,
+    color = NULL
+  )
+```
 
+### Calibration plot
+
+In the calibration plot, we split the predicted probabilities into 5 bins: 0-10%, 10-20%, 20-30%, 30-40%, & 40%+. Then we take the average predicted probability of non-response in each bin and plot it against the actual non-response rate in each bin. The closer the model is to the 45 degree dashed line the better it performs.
+
+The logistic regression closely matches the 45 degree line for the first 4 bins. Like the other models, its predictions for observations with the greatest probability of non-response are somewhat overstated.
+
+```{r}
 best_predictions %>% 
+  bind_rows(ensemble_predictions) %>% 
   mutate(
     pr_bin = cut(
       `.pred_Non-Response`,
@@ -743,15 +1046,158 @@ best_predictions %>%
       labels = seq(0, 0.4, 0.1)
     ) 
   ) %>% 
-  group_by(wflow_id, pr_bin) %>% 
+  group_by(model_label, pr_bin) %>% 
   summarise(
     n = n(),
     avg_pred_prob = mean(`.pred_Non-Response`),
     pct_nonresponse = mean(non_response == "Non-Response")
   ) %>% 
-  ggplot(aes(x = avg_pred_prob, y = pct_nonresponse, group = wflow_id, color = wflow_id)) +
+  ggplot(
+    aes(
+      x = avg_pred_prob, y = pct_nonresponse,
+      group = model_label, color = model_label
+    )
+  ) +
   geom_line() +
   geom_point() +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
-  scale_y_continuous()
+  scale_y_continuous(limits = c(0, 0.5)) +
+  labs(
+    title = "Prediction calibration plot",
+    subtitle = "Average predicted vs. actual non-response rate",
+    x = "Bin avg. predicted non-response rate",
+    y = "Bin avg. actual non-response rate",
+    color = NULL,
+    caption = "Dashed line represents perfect alignment between predicted and actual.\nThe 5 bins of predicted probability are: 0-10%, 10-20%, 20-30%, 30-40%, & 40%+."
+  )
+```
+
+## Fitting the full model
+
+```{r}
+chosen_model = "basic_logit_glm"
+
+best_chosen_model = grid_results %>% 
+  extract_workflow_set_result(chosen_model) %>% 
+  select_best(metric = selection_metric)
+
+final_model = grid_results %>% 
+  extract_workflow(chosen_model) %>% 
+  finalize_workflow(best_chosen_model) %>% 
+  last_fit(split = anrr_split)
+
+fitted_final_model = extract_workflow(final_model)
+```
+
+### Model summary
+```{r}
+term_names = hardhat::get_levels(anrr_weights) %>%
+  unlist()
+names(term_names) = make.names(term_names)
+
+tidy(fitted_final_model, exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)") %>% 
+  separate(term, c("factor", "term"), sep = "_(?!.*_)") %>% 
+  left_join(as_tibble(reference_levels, rownames = "factor"), by = "factor") %>% 
+  mutate(
+    factor = str_replace_all(factor, "_", " "),
+    factor = str_to_title(factor),
+    factor = glue("**{factor}** *(Ref. level: {value})*"),
+    term = str_replace_all(term, term_names)
+  ) %>% 
+  select(-value) %>% 
+  gt(groupname_col = "factor", process_md = TRUE) %>% 
+  cols_label(
+    term = "",
+    estimate = "Odds Ratio",
+    std.error = "Std. Error",
+    statistic = "Z-Statistic",
+    p.value = "p-value"
+  ) %>% 
+  fmt_number(c(estimate, std.error, statistic), decimals = 2) %>% 
+  fmt(p.value, fns = gtsummary::style_pvalue) %>% 
+  tab_style(
+    cell_text(weight = "bold"),
+    cells_column_labels()
+  ) %>% 
+  tab_style(
+    cell_fill(color = "#00000000"),
+    cells_row_groups()
+  )
+```
+
+### Final ROC curve
+```{r}
+final_roc_auc = collect_metrics(final_model) %>%
+  filter(.metric == "roc_auc") %>%
+  pull(.estimate) %>% 
+  round(digits = 3)
+
+final_model %>% 
+  collect_predictions() %>% 
+  roc_curve(non_response, `.pred_Non-Response`, event_level = "second") %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_line() +
+  geom_abline(linetype = "dashed") +
+  labs(
+    title = "Final model ROC curve",
+    subtitle = glue("AUC: {final_roc_auc}")
+  )
+```
+
+### Final calibration plot
+```{r}
+final_model %>% 
+  collect_predictions() %>% 
+  mutate(
+    pr_bin = cut(
+      `.pred_Non-Response`,
+      breaks = c(seq(0, 0.4, 0.1), 1),
+      labels = seq(0, 0.4, 0.1)
+    ) 
+  ) %>% 
+  group_by(pr_bin) %>% 
+  summarise(
+    n = n(),
+    avg_pred_prob = mean(`.pred_Non-Response`),
+    pct_nonresponse = mean(non_response == "Non-Response"),
+  ) %>% 
+  ggplot(aes(x = avg_pred_prob, y = pct_nonresponse)) +
+  geom_line() +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  scale_y_continuous(limits = c(0, 0.6)) +
+  labs(
+    title = "Prediction calibration plot",
+    subtitle = "Average predicted vs. actual non-response rate",
+    x = "Bin avg. predicted non-response rate",
+    y = "Bin avg. actual non-response rate",
+    caption = "Dashed line represents perfect alignment between predicted and actual.\nThe 5 bins of predicted probability are: 0-10%, 10-20%, 20-30%, 30-40%, & 40%+."
+  ) +
+  theme(panel.grid.minor = element_line(color = "grey90"))
+```
+
+```{r}
+butchered_model = butcher(fitted_final_model)
+
+butchered_model$pre$case_weights = NULL
+butchered_model$pre$mold$blueprint$recipe$tr_info = NULL
+butchered_model$pre$mold$extras$roles$case_weights = NULL
+butchered_model$fit$fit$fit$residuals = NULL
+butchered_model$fit$fit$fit$formula = NULL
+butchered_model$fit$fit$fit$linear.predictors = NULL
+butchered_model$fit$fit$fit$qr$qr = NULL
+butchered_model$fit$fit$fit$model = NULL
+butchered_model$fit$fit$fit$effects = NULL
+butchered_model$fit$fit$fit$weights = NULL
+butchered_model$fit$fit$fit$prior.weights = NULL
+
+write_rds(
+  list(
+    model = butchered_model,
+    prepare_survey_data = prepare_survey_data,
+    prepare_model_data = prepare_model_data
+  ),
+  "non_response_model.rds"
+)
 ```
