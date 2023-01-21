@@ -1,0 +1,33 @@
+/*-- scss:defaults --*/
+
+// Fonts
+
+$font-family-sans-serif: Lato, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji" !default;
+
+$font-family-monospace: "Fira Code", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !default;
+
+$font-size-root: 16px;
+
+// Font Colors
+
+$body-bg: #ffce6740;
+
+/*-- scss:rules --*/
+
+// Variables
+
+$web-font-path: "https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&family=Lato:ital,wght@0,400;0,700;1,400&display=swap" !default;
+@if $web-font-path {
+  @import url($web-font-path);
+}
+
+$kbl-fn-font-size-scalar: 0.75;
+
+// Typography
+pre {
+  color: $body-color;
+}
+
+.kbl-fn {
+  font-size: $font-size-root * $kbl-fn-font-size-scalar;
+}
